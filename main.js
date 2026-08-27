@@ -1169,23 +1169,16 @@ try {
       }
     };
     div.onclick = () => {
-      const gameId = div.dataset.gameId;
-      const gameName = div.dataset.gameName || "";
-      let processMap = {};
-      try {
-        processMap = JSON.parse(
-          localStorage.getItem("leigod_custom_process_map") || "{}",
-        );
-      } catch {}
-      const hasCustomProcesses =
-        gameId &&
-        Array.isArray(processMap[gameId]) &&
-        processMap[gameId].length > 0;
-      if (
-        div.dataset.state === "missing" ||
-        (div.dataset.state === "active" && hasCustomProcesses)
-      ) {
+      if (div.dataset.state === "missing") {
+        const gameId = div.dataset.gameId;
+        const gameName = div.dataset.gameName || "";
         if (!gameId) return;
+        let processMap = {};
+        try {
+          processMap = JSON.parse(
+            localStorage.getItem("leigod_custom_process_map") || "{}",
+          );
+        } catch {}
         const modal = document.createElement("div");
         modal.id = "leigod-process-modal";
         modal.style.cssText = \`position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,.6);z-index:99999;display:flex;justify-content:center;align-items:center;\`;
@@ -1233,8 +1226,7 @@ try {
               "&names=" +
               encodeURIComponent(names),
           );
-          modal.querySelector("#leigod-process-save").innerText =
-            "已保存并开始监控";
+          modal.remove();
         };
         modal.querySelector("#leigod-process-report").onclick = () => {
           const names = input.value.trim() || "请填写实际进程名.exe";
@@ -1522,11 +1514,6 @@ style="background:#ff9800;
             div.title = "误判了？点击暂停倒计时，并上报真实进程";
         } else if('${cfg.code}' === 'missing') {
             div.title = "点击设置当前游戏的自定义进程名";
-        } else if('${cfg.code}' === 'active') {
-            try {
-                const map = JSON.parse(localStorage.getItem("leigod_custom_process_map") || "{}");
-                div.title = Array.isArray(map[div.dataset.gameId]) ? "点击修改或上报本地进程名" : "";
-            } catch { div.title = ""; }
         } else {
             div.title = ""; 
         }
