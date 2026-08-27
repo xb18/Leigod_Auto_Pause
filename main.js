@@ -17,6 +17,7 @@ try {
   let GLOBAL_GRACE_TIME = 15000; // 游戏退出倒计时时间，默认15s
   let GLOBAL_STARTUP_WAIT_TIME = 180000; // 第一次启动等待时间，默认3分钟
   let GLOBAL_CHECK_MODE = "api";
+  let GLOBAL_CURRENT_GAME_ID = null;
 
   //========== 常量 ==========
   const DevMode = false; //调试开关（true为开启）
@@ -147,6 +148,16 @@ try {
       .split(",")
       .map((p) => p.trim())
       .filter((p) => p !== "");
+  }
+  function normalizeCustomProcesses(gameProcessStr) {
+    const processes = gameProcessStr
+      .split(/[,;\n\r，；]+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    return [...new Set(processes)].filter(
+      (processName) =>
+        processName.length <= 260 && !/[\\/:*?"<>|]/.test(processName),
+    );
   }
   //该函数用于处理时间吧时间转换为 mm:ss格式
   function formatTime(time) {
@@ -681,6 +692,33 @@ try {
             );
           }
           return;
+        case "leigod-plugin://set-processes":
+          try {
+            const urlObj = new URL(url);
+            const gameId = urlObj.searchParams.get("gameId");
+            const processText = urlObj.searchParams.get("names") || "";
+            const customProcesses = normalizeCustomProcesses(processText);
+            if (!gameId) throw new Error("Missing gameId");
+            writeLog(
+              `[interceptedOpenExternal] Custom processes for game ${gameId}: ${JSON.stringify(customProcesses)}`,
+            );
+            showStartupNotification(
+              "设置已保存",
+              customProcesses.length > 0
+                ? `开始监控 ${customProcesses.join(", ")}`
+                : "已清除该游戏的自定义进程",
+              true,
+              3000,
+            );
+            if (customProcesses.length > 0) {
+              MonitoringManager.start(customProcesses);
+            }
+          } catch (e) {
+            writeLog(
+              `[interceptedOpenExternal] Error parsing custom processes: ${e.message}`,
+            );
+          }
+          return;
 
         default: {
           const result = await listener(event, ...args);
@@ -898,6 +936,7 @@ try {
     }
     let gameProcessList = [];
     try {
+      GLOBAL_CURRENT_GAME_ID = gameInfoArg.game_id;
       if (ExcludedGameIDs.includes(gameInfoArg.game_id)) { //如果是排除项目就直接返回
         showStartupNotification(
           "自动暂停已跳过",
@@ -945,6 +984,17 @@ try {
         !GameInfo.game_process ||
         GameInfo.game_process.trim() === ""
       ) {
+        const savedCustomProcesses =
+          await mainWindow.webContents.executeJavaScript(
+            `(() => { try { return JSON.parse(localStorage.getItem("leigod_custom_process_map") || "{}")[${JSON.stringify(String(gameInfoArg.game_id))}] || []; } catch { return []; } })()`,
+          );
+        if (savedCustomProcesses.length > 0) {
+          writeLog(
+            `[GameMonitoring] Automatic detection failed; using saved custom processes for game ${gameInfoArg.game_id}: ${JSON.stringify(savedCustomProcesses)}`,
+          );
+          MonitoringManager.start([...savedCustomProcesses]);
+          return;
+        }
         showStartupNotification(
           "获取游戏进程失败",
           "目标game_process字段中无法获取游戏名称,点击顶部状态栏“🔗 提交进程”进行反馈提交。",
@@ -1118,11 +1168,80 @@ try {
     };
     div.onclick = () => {
       if (div.dataset.state === "missing") {
-        //先弹github的提交进程的说明页面把,看后续是否需要。
-        window.leigodSimplify.invoke(
-          "open-external",
-          "https://github.com/assortest/Leigod_Auto_Pause?tab=readme-ov-file#-%E8%B4%A1%E7%8C%AE%E6%8C%87%E5%8D%97",
-        );
+        const gameId = div.dataset.gameId;
+        if (!gameId) return;
+        let processMap = {};
+        try {
+          processMap = JSON.parse(
+            localStorage.getItem("leigod_custom_process_map") || "{}",
+          );
+        } catch {}
+        const modal = document.createElement("div");
+        modal.id = "leigod-process-modal";
+        modal.style.cssText = \`position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,.6);z-index:99999;display:flex;justify-content:center;align-items:center;\`;
+        modal.innerHTML = \`<div style="background:#2b2b2b;padding:20px 30px;border-radius:8px;color:#fff;width:380px;box-sizing:border-box;box-shadow:0 4px 12px rgba(0,0,0,.5);">
+          <h3 style="margin:0 0 10px;color:#2196f3;font-size:16px;font-weight:normal;">设置当前游戏的进程名</h3>
+          <p style="font-size:12px;color:#aaa;line-height:1.6;">请从任务管理器“详细信息”页复制游戏主程序名称。支持多个进程，以逗号、分号或换行分隔。</p>
+          <textarea id="leigod-custom-processes" rows="4" placeholder="Game.exe, Launcher.exe" style="width:100%;box-sizing:border-box;resize:vertical;background:#1f1f1f;border:1px solid #555;border-radius:4px;color:#fff;padding:8px;font-size:13px;"></textarea>
+          <div style="display:flex;gap:12px;margin-top:12px;"><button id="leigod-process-cancel" style="flex:1;background:#444;border:none;color:#ccc;padding:8px;border-radius:4px;cursor:pointer;">取消</button><button id="leigod-process-save" style="flex:1;background:#2196f3;border:none;color:#fff;padding:8px;border-radius:4px;cursor:pointer;">保存并开始监控</button></div>
+          <button id="leigod-process-report" style="width:100%;margin-top:10px;background:transparent;border:1px solid #666;color:#aaa;padding:7px;border-radius:4px;cursor:pointer;">前往 GitHub 提交进程信息</button>
+        </div>\`;
+        document.body.appendChild(modal);
+        const input = modal.querySelector("#leigod-custom-processes");
+        input.value = Array.isArray(processMap[gameId])
+          ? processMap[gameId].join(", ")
+          : "";
+        input.focus();
+        modal.querySelector("#leigod-process-cancel").onclick = () =>
+          modal.remove();
+        modal.onclick = (e) => {
+          if (e.target === modal) modal.remove();
+        };
+        modal.querySelector("#leigod-process-save").onclick = () => {
+          const names = input.value.trim();
+          if (!names) {
+            input.focus();
+            return;
+          }
+          const normalized = [
+            ...new Set(
+              names
+                .split(/[,;\\n\\r，；]+/)
+                .map((p) => p.trim())
+                .filter(Boolean),
+            ),
+          ];
+          processMap[gameId] = normalized;
+          localStorage.setItem(
+            "leigod_custom_process_map",
+            JSON.stringify(processMap),
+          );
+          window.leigodSimplify.invoke(
+            "open-external",
+            "leigod-plugin://set-processes?gameId=" +
+              encodeURIComponent(gameId) +
+              "&names=" +
+              encodeURIComponent(names),
+          );
+          modal.remove();
+        };
+        modal.querySelector("#leigod-process-report").onclick = () => {
+          const names = input.value.trim() || "请填写实际进程名.exe";
+          const issueTitle = "[游戏进程补充] game_id " + gameId;
+          const issueBody =
+            "游戏 ID：" +
+            gameId +
+            "\\n实际进程名：" +
+            names +
+            "\\n\\n该游戏无法通过雷神 API 或本地数据库自动识别进程。";
+          window.leigodSimplify.invoke(
+            "open-external",
+            "https://github.com/assortest/Leigod_Auto_Pause/issues/new?title=" +
+              encodeURIComponent(issueTitle) +
+              "&body=" +
+              encodeURIComponent(issueBody),
+          );
+        };
       } else if (div.dataset.state === "counting" || div.dataset.state === "waiting") {
         const modal = document.createElement("div");
         modal.id = "leigod-confirm-modal";
@@ -1355,7 +1474,11 @@ style="background:#ff9800;
     });
   }
   //该函数用于更新ui状态
-  function updateUiState(statecode, timeText = null) {
+  function updateUiState(
+    statecode,
+    timeText = null,
+    gameId = GLOBAL_CURRENT_GAME_ID,
+  ) {
     //根据状态码拿到相应的配置
     const cfg = UI_STATES[statecode.toUpperCase()];
     if (!cfg) {
@@ -1371,12 +1494,17 @@ style="background:#ff9800;
     if(div && txt){
         div.style.color=\`${cfg.color}\`;
         div.style.background=\`${cfg.bg}\`;
-        txt.innerText=\`${displayText}\`; 
+        txt.innerText=\`${displayText}\`;
         div.dataset.state = \`${cfg.code}\`; //告诉悬停
+        if (${JSON.stringify(gameId)} !== null) {
+            div.dataset.gameId = String(${JSON.stringify(gameId)});
+        } else if ('${cfg.code}' !== 'missing') {
+            delete div.dataset.gameId;
+        }
         if('${cfg.code}' === 'counting') {
             div.title = "误判了？点击暂停倒计时，并上报真实进程";
         } else if('${cfg.code}' === 'missing') {
-            div.title = "点击前往 GitHub 提交该游戏的进程名";
+            div.title = "点击设置当前游戏的自定义进程名";
         } else {
             div.title = ""; 
         }
