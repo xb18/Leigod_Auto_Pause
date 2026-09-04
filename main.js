@@ -19,7 +19,7 @@ try {
   let GLOBAL_CHECK_MODE = "api";
 
   //========== 常量 ==========
-  const DevMode = true; //调试开关（true为开启）
+  const DevMode = false; //调试开关（true为开启）
   const TIME_TEXT_MAP = {
     100: "立即暂停",
     15000: "15秒",
